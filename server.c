@@ -13,67 +13,77 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
-
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <pthread.h>
 
 #define BUFF_SIZE 1024 /*max text line length*/
-#define SERV_PORT 3000 /*port*/
 #define LISTENQ 8      /*maximum number of client connections */
 
-enum mode
+struct client_info
 {
-    PRATICE,
-    NEW,
-    CHOOSE
+    int conn_sock;
+    char ip[INET_ADDRSTRLEN];
 };
 
-//1 = waiting, 2 = testing, 3 = finish
+int clients[100];
+int n = 0;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct
 {
     int quesID;
     char answer[BUFF_SIZE];
-} client_answers;
+} client_answers_t;
 
 typedef struct
 {
-    int *userID;
-} user;
+    int roomID;
+    int num_of_question_of_test;
+    int time_of_test;
+    int status; //1 = waiting, 2 = testing, 3 = finish
+    int num_of_user;
+    int list_of_client[100];
+} rooms_t;
 
-typedef struct
-{
-    int *roomID;
-    int *num_of_question;
-    int *time_of_test;
-    int *status;
-    int *num_of_user;
-    user list_of_userID[100];
-} rooms;
+// user id
+int user_current_ID;
 
-static int *userCurrentID;
-unsigned int port = 3306;
-static char *unix_socket = NULL;
-unsigned int flag = 0;
+//total user
+static int total_user = 1;
+//total room
+static int total_room = 0;
+
+//list of room
+static rooms_t list_of_room[100];
+
+//active room status = 1;
+static int active_room_ID;
+
 char recv_answers[BUFF_SIZE];
 char send_message[BUFF_SIZE], recv_message[BUFF_SIZE];
 int bytes_sent;
 int bytes_received;
-int scores;
-sqlite3 *db;
-client_answers answers[100];
-static rooms list_of_room[100];
-static int *room_base_ID;
-static int *active_room_ID;
-int number_of_question;
-char *file_name_roomlist = "server_room_list.txt";
 
+//user score
+int scores;
+
+sqlite3 *db;
+client_answers_t answers[100];
+
+int number_of_question;
+
+char *file_name_roomlist = "server_room_list.txt";
+char *file_name_questionList = "exam_server.txt";
+
+//print DONE
 void printDONE()
 {
     printf("--------------DONE--------------\n");
 }
 
+//send file to client
 void sendFile(int conn_sock, char *file_name)
 {
 
@@ -85,7 +95,6 @@ void sendFile(int conn_sock, char *file_name)
     ssize_t bytes_received;
     int offset;
     char file_size[256];
-    //printf("TRASH_1: %s\n", trash);
     fd = open(file_name, O_RDONLY);
 
     if (fd == -1)
@@ -101,7 +110,7 @@ void sendFile(int conn_sock, char *file_name)
         {
 
             sprintf(file_size, "%d", file_stat.st_size);
-            printf("\nFile size : %d\n", file_stat.st_size);
+            //printf("\nFile size : %d\n", file_stat.st_size);
             // Sending file size
             bytes_sent = send(conn_sock, file_size, sizeof(file_size), 0);
             if (bytes_sent <= 0)
@@ -109,15 +118,13 @@ void sendFile(int conn_sock, char *file_name)
                 printf("\nConnection closed!\n");
             }
             recv(conn_sock, trash, BUFSIZ - 1, 0);
-            printf("message size: %s --- done", trash);
             int fs_block_sz;
             offset = 0;
 
             while (fs_block_sz = sendfile(conn_sock, fd, &offset, BUFSIZ) > 0)
             {
-                printf("sending ...\n");
+                printf("\n");
             }
-            printf("Ok File  was Sent!\n");
 
             bytes_received = recv(conn_sock, buff, BUFSIZ - 1, 0);
             if (bytes_received <= 0)
@@ -126,86 +133,85 @@ void sendFile(int conn_sock, char *file_name)
                 //break;
             }
             buff[bytes_received] = '\0';
-            printf("Reply from server: %s", buff);
+            printf("message form clent: %s",buff);
         }
     }
     remove(file_name);
-    printf("DELETE FILE SUCCESSFUL\n");
-    printf("Wait for a new turn\n\n");
 }
 
-void create_new_room(int num, int time_test)
+//create new test room
+void create_new_room(int num, int duration, int conn_sock)
 {
-    printf("step 1\n");
-    *room_base_ID = *room_base_ID + 1;
-    *active_room_ID = *active_room_ID + 1;
-    printf("rome base id: %d\n", *room_base_ID);
-    printf("step 2\n");
-    *list_of_room[*room_base_ID].roomID = *room_base_ID;
-    *list_of_room[*room_base_ID].num_of_question = num;
-    *list_of_room[*room_base_ID].time_of_test = time_test;
-    *list_of_room[*room_base_ID].status = 1;
-    *list_of_room[*room_base_ID].num_of_user = 1;
-    list_of_room[*room_base_ID].list_of_userID[0].userID = 0; //waiting;
-    list_of_room[*room_base_ID].list_of_userID[1].userID = *userCurrentID; //waiting;
+    total_room = total_room + 1;
+    active_room_ID = active_room_ID + 1;
+    list_of_room[total_room].roomID = total_room;
+    list_of_room[total_room].num_of_question_of_test = num;
+    list_of_room[total_room].time_of_test = duration;
+    list_of_room[total_room].status = 1;
+    list_of_room[total_room].num_of_user = 1;
+    list_of_room[total_room].list_of_client[0] = conn_sock; //waiting;
 }
 
+void create_roomlist_file()
+{
+    int i;
+    FILE *ptr;
+    ptr = fopen(file_name_roomlist, "w");
+    char payload[BUFF_SIZE];
+    for (i = 1; i < total_room + 1; i++)
+    {
+        sprintf(payload, "%d\t%d\t%d\t%d\n", list_of_room[i].roomID, list_of_room[i].num_of_question_of_test, list_of_room[i].time_of_test, list_of_room[i].status);
+        fputs(payload, ptr);
+    }
+    fputs("\n", ptr);
+    fclose(ptr);
+}
+
+void send_roomlist_file(int conn_sock)
+{
+    printf("send room file\n");
+    memset(send_message, 0, strlen(send_message));
+    char trash[BUFF_SIZE];
+    FILE *ptr;
+    ptr = fopen(file_name_roomlist, "r");
+    sprintf(send_message, "SENDROOMLIST-%d", total_room);
+    bytes_sent = send(conn_sock, send_message, strlen(send_message), 0);
+    recv(conn_sock, trash, BUFSIZ - 1, 0);
+    puts(trash);
+    sendFile(conn_sock, file_name_roomlist);
+    fclose(ptr);
+    remove(file_name_roomlist);
+}
+
+//create room list file and send to client
 void create_roomlist_file_and_send(int conn_sock)
 {
-    memset(send_message, 0, strlen(send_message));
-    //bytes_sent = send(conn_sock, "SUCCESS- ", strlen("SUCCESS- "), 0);
     char trash[BUFF_SIZE];
-    if (*room_base_ID == 0)
+    if (total_room == 0 || active_room_ID == 0)
     {
         printf("There is no active room\n");
         bytes_sent = send(conn_sock, "NOROOM- ", strlen("NOROOM- "), 0);
         recv(conn_sock, trash, BUFSIZ - 1, 0);
-        printf("trash_create_room_list : %s", trash);
-    }
-    else if (*active_room_ID == 0)
-    {
-        printf("There is no active room\n");
-        bytes_sent = send(conn_sock, "NOROOM- ", strlen("NOROOM- "), 0);
-        recv(conn_sock, trash, BUFSIZ - 1, 0);
-        printf("trash_create_room_list : %s", trash);
     }
     else
     {
-        int i;
-        FILE *ptr;
-        ptr = fopen(file_name_roomlist, "w");
-        char payload[BUFF_SIZE];
-
-        for (i = 1; i < *room_base_ID + 1; i++)
-        {
-            sprintf(payload, "%d\t%d\t%d\t%d\n", *list_of_room[i].roomID, *list_of_room[i].num_of_question, *list_of_room[i].time_of_test, *list_of_room[i].status);
-            fputs(payload, ptr);
-        }
-        fputs("\n", ptr);
-        fclose(ptr);
-        ptr = fopen(file_name_roomlist, "r");
-        sprintf(send_message, "SENDROOMLIST-%d", *room_base_ID);
-        bytes_sent = send(conn_sock, send_message, strlen(send_message), 0);
-        recv(conn_sock, trash, BUFSIZ - 1, 0);
-        sendFile(conn_sock, file_name_roomlist);
-        fclose(ptr);
-        remove(file_name_roomlist);
+        create_roomlist_file();
+        send_roomlist_file(conn_sock);
     }
 }
 
+//write question from database to file
 static int callback_write(void *data, int argc, char **argv, char **azColName)
 {
     int i;
-    char *file_name = "exam_server.txt";
     //fprintf(stderr, "%s: ", (const char *)data);
     FILE *ptr;
-    ptr = fopen(file_name, "a");
+    ptr = fopen(file_name_questionList, "a");
     char payload[BUFF_SIZE];
 
     for (i = 0; i < argc - 1; i++)
     {
         char trash[BUFF_SIZE];
-        //printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
         sprintf(payload, "%s\t", argv[i]);
         fputs(payload, ptr);
     }
@@ -214,23 +220,21 @@ static int callback_write(void *data, int argc, char **argv, char **azColName)
     return 0;
 }
 
+//check correct answer
 static int callback_judge(void *data, int argc, char **argv, char **azColName)
 {
     int i;
-    printf("Server's judgement \n");
     printf("user_answer: %s, correct_answer: %s\n", data, argv[argc - 1]);
     if (strcmp(data, argv[argc - 1]) == 0)
     {
         scores++;
     }
-    printf("CHECK CALLBACK\n");
     return 0;
 }
 
-void prepare_test(int conn_sock)
+//create file question list
+void prepare_test()
 {
-    char *file_name = "exam_server.txt";
-    char trash[BUFF_SIZE];
     char *zErrMsg = 0;
     int rc;
     rc = sqlite3_open("test.db", &db);
@@ -242,12 +246,12 @@ void prepare_test(int conn_sock)
     }
     else
     {
-        fprintf(stderr, "Opened database successfully\n");
+        //fprintf(stderr, "Opened database successfully\n");
     }
     const char *data = "Callback function called";
     char *sql;
+    //change
     sql = "SELECT * from question";
-    printf("%s\n", sql);
     rc = sqlite3_exec(db, sql, callback_write, (void *)data, &zErrMsg);
     if (rc != SQLITE_OK)
     {
@@ -256,26 +260,30 @@ void prepare_test(int conn_sock)
     }
     else
     {
-        fprintf(stdout, "Operation done successfully\n");
+        //fprintf(stdout, "Operation done successfully\n");
     }
     sqlite3_close(db);
-    bytes_sent = send(conn_sock, "SEND- ", strlen("SEND- "), 0);
-    recv(conn_sock, trash, BUFSIZ - 1, 0);
-    printf("strash _ prepare _ test :%s", trash);
-    sendFile(conn_sock, file_name);
-    printDONE();
 }
 
-void judge(int conn_sock, int num_of_question)
+//send test to client
+void send_test(int conn_sock)
 {
-    //memset(answers, 0, strlen(answers));
-    memset(send_message, 0, strlen(send_message));
+    char trash[BUFF_SIZE];
+    bytes_sent = send(conn_sock, "SEND- ", strlen("SEND- "), 0);
+    //puts(trash);
+    sleep(1);
+    printf("begin transfer file t0 %d\n", conn_sock);
+    sendFile(conn_sock, file_name_questionList);
+}
 
+void progress_user_answers(int num_of_question)
+{
+    memset(send_message, 0, strlen(send_message));
     int i = 0;
     scores = 0;
     char *idAndAnswer[2];
     char *listOfAnswer[num_of_question];
-
+    //receive answers and save to array
     char *p = strtok(recv_answers, ":");
     while (p != NULL)
     {
@@ -283,7 +291,6 @@ void judge(int conn_sock, int num_of_question)
         listOfAnswer[i++] = p;
         p = strtok(NULL, ":");
     }
-    printf("number of question: %d\n", num_of_question);
     for (i = 0; i < num_of_question; i++)
     {
         int temp = 0;
@@ -297,7 +304,11 @@ void judge(int conn_sock, int num_of_question)
         strcpy(answers[i].answer, idAndAnswer[1]);
         printf("%d/%s\n", answers[i].quesID, answers[i].answer);
     }
+}
 
+void compare_answers_with_db(int num_of_question)
+{
+    int i;
     char *zErrMsg = 0;
     int rc;
     rc = sqlite3_open("test.db", &db);
@@ -309,18 +320,15 @@ void judge(int conn_sock, int num_of_question)
     }
     else
     {
-        fprintf(stderr, "Opened database successfully\n");
+        //fprintf(stderr, "Opened database successfully\n");
     }
+
     for (i = 0; i < num_of_question; i++)
     {
-        printf("begin\n");
         char *data = answers[i].answer;
         int id = answers[i].quesID;
-        //printf("data: %s + %d\n", data, id);
         char sql[BUFF_SIZE];
-        //         char *sql = "SELECT * from question WHERE id =  1;";
         sprintf(sql, "SELECT * from question WHERE id =  %d;", id);
-        //printf("sql: %s\n", sql);
 
         rc = sqlite3_exec(db, sql, callback_judge, (void *)data, &zErrMsg);
         if (rc != SQLITE_OK)
@@ -333,13 +341,189 @@ void judge(int conn_sock, int num_of_question)
             fprintf(stdout, "Operation done successfully\n");
         }
     }
-
     sqlite3_close(db);
+}
+
+//check anwers from client and send score to client
+void judge(int conn_sock, int num_of_question)
+{
+    progress_user_answers(num_of_question);
+    //compare correct answers with database
+    compare_answers_with_db(num_of_question);
+    //send score to client
     printf("score: %d\n", scores);
     sprintf(send_message, "SENDRESULT-%d", scores);
-    printf("send score: %s - %d\n", send_message, strlen(send_message));
     send(conn_sock, send_message, strlen(send_message), 0);
-    printDONE();
+}
+
+void sendtoall(char *msg, int curr)
+{
+    int i;
+    pthread_mutex_lock(&mutex);
+    for (i = 0; i < n; i++)
+    {
+        if (clients[i] != curr)
+        {
+            if (send(clients[i], msg, strlen(msg), 0) < 0)
+            {
+                perror("sending failure");
+                continue;
+            }
+        }
+    }
+    pthread_mutex_unlock(&mutex);
+}
+
+void send_START_signal(int choosen_room)
+{
+    int i, j;
+    pthread_mutex_lock(&mutex);
+    for (i = 0; i < n; i++)
+    {
+        for (j = 0; j < list_of_room[choosen_room].num_of_user; j++)
+        {
+            if (clients[i] == list_of_room[choosen_room].list_of_client[j])
+            {
+                bytes_sent = send(clients[i], "BEGINTESTROOM- ", strlen("BEGINTESTROOM- "), 0);
+                /* bytes_received = recv(clients[i], recv_message, BUFF_SIZE - 1, 0);
+                recv_message[bytes_received] = '\0';
+                printf("%s + %d\n", recv_message, clients[i]); */
+                printf("done send\n");
+            }
+            else
+            {
+                printf("error\n");
+            }
+        }
+    }
+    pthread_mutex_unlock(&mutex);
+}
+
+void *echo(void *sock)
+{
+    struct client_info client = *((struct client_info *)sock);
+    char msg[500];
+    int len;
+    int j;
+    while (1)
+    {
+        int bytes_received;
+        char *roomInformation[2];
+
+        memset(recv_message, '\0', strlen(recv_message));
+        char *request[2];
+        bytes_received = recv(client.conn_sock, recv_message, BUFF_SIZE - 1, 0);
+        recv_message[bytes_received] = '\0';
+        printf("message .%s. from %d\n", recv_message, client.conn_sock);
+        int i = 0;
+        char *p = strtok(recv_message, "-");
+        while (p != NULL)
+        {
+            request[i++] = p;
+            p = strtok(NULL, "\0");
+        }
+        printf("Receiving data ...\n");
+        if (strcmp(request[0], "PRACTICE") == 0)
+        {
+            printf("Practice start\n");
+            prepare_test();
+            send_test(client.conn_sock);
+            number_of_question = 3;
+            printDONE();
+        }
+        else if (strcmp(request[0], "NEW") == 0)
+        {
+            char trash[BUFSIZ];
+            i = 0;
+            char *dump = strtok(request[1], "-");
+            while (dump != NULL)
+            {
+                roomInformation[i++] = dump;
+                dump = strtok(NULL, "\0");
+            }
+            printf("Number of question: \"%d\". \n", atoi(roomInformation[0]));
+            number_of_question = atoi(roomInformation[0]);
+            printf("Time: \"%d\". \n", atoi(roomInformation[1]));
+            create_new_room(atoi(roomInformation[0]), atoi(roomInformation[1]), client.conn_sock);
+            sprintf(send_message, "CREATEROOM-%d\n", total_room);
+            bytes_sent = send(client.conn_sock, send_message, strlen(send_message), 0);
+            recv(client.conn_sock, trash, BUFF_SIZE - 1, 0);
+
+            printDONE();
+        }
+        else if (strcmp(request[0], "START") == 0)
+        {
+            int id = atoi(request[1]);
+            active_room_ID = active_room_ID - 1;
+            send_START_signal(id);
+            list_of_room[total_room].status = 2;
+            prepare_test();
+            send_test(client.conn_sock);
+            printDONE();
+        }
+        else if (strcmp(request[0], "REQUESTLIST") == 0)
+        {
+            printf("step 1\n");
+            create_roomlist_file_and_send(client.conn_sock);
+            printf("step 2\n");
+            printDONE();
+        }
+        else if (strcmp(request[0], "CHOOSE") == 0)
+        {
+            int roomID_choose = atoi(request[1]);
+            //printf("%d - %s\n", roomID_choose, request[0]);
+            list_of_room[roomID_choose].list_of_client[list_of_room[roomID_choose].num_of_user] = client.conn_sock;
+            list_of_room[roomID_choose].num_of_user++;
+            printDONE();
+        }
+        else if (strcmp(request[0], "READYTESTROOM") == 0)
+        {
+            printf("haha\n");
+            prepare_test();
+            send_test(client.conn_sock);
+            printDONE();
+        }
+        else if (strcmp(request[0], "FINISH") == 0)
+        {
+            strcpy(recv_answers, request[1]);
+            recv_answers[strlen(recv_answers) - 1] = '\0';
+            judge(client.conn_sock, number_of_question);
+            printDONE();
+        }
+        else if (strcmp(request[0], "QUIT") == 0)
+        {
+            printf("Disconnected\n");
+            printDONE();
+            break;
+        }
+        else
+        {
+            printf("Client disconnect unexpectedly\n");
+            printDONE();
+        }
+    }
+    int i;
+    printf("User exited. \n");
+    pthread_mutex_lock(&mutex);
+    printf("%s disconnected\n", client.ip);
+    for (i = 0; i < n; i++)
+    {
+        printf("client %d: %d", clients[i]);
+        if (clients[i] == client.conn_sock)
+        {
+            j = i;
+            while (j < n - 1)
+            {
+                clients[j] = clients[j + 1];
+                j++;
+            }
+        }
+    }
+    n--;
+    pthread_mutex_unlock(&mutex);
+
+    close(client.conn_sock);
+    pthread_exit(NULL);
 }
 
 int main(int argc, char **argv)
@@ -355,8 +539,8 @@ int main(int argc, char **argv)
     struct sockaddr_in servaddr, cliaddr;
     int listen_sock, conn_sock; /* file descriptors */
 
-    struct sockaddr_in server; /* server's address information */
-    struct sockaddr_in client; /* client's address information */
+    struct sockaddr_in server_addr; /* server's address information */
+    struct sockaddr_in client_addr; /* client's address information */
     int sin_size;
 
     //Step 1: Construct a TCP socket to listen connection request
@@ -366,11 +550,11 @@ int main(int argc, char **argv)
         return 0;
     }
     //Step 2: Bind address to socket
-    bzero(&server, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(atoi(argv[1]));     /* Remember htons() from "Conversions" section? =) */
-    server.sin_addr.s_addr = htonl(INADDR_ANY); /* INADDR_ANY puts your IP address automatically */
-    if (bind(listen_sock, (struct sockaddr *)&server, sizeof(server)) == -1)
+    bzero(&server_addr, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(atoi(argv[1]));     /* Remember htons() from "Conversions" section? =) */
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY); /* INADDR_ANY puts your IP address automatically */
+    if (bind(listen_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
     { /* calls bind() */
         perror("\nError: ");
         return 0;
@@ -382,176 +566,31 @@ int main(int argc, char **argv)
         perror("\nError: ");
         return 0;
     }
-    //PrintList();
     int pid;
-    int i, j;
     //Step 4: Communicate with client"
     printf(" -- BEGIN PROGRESS -- \n");
-    room_base_ID = mmap(NULL, sizeof *room_base_ID, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    active_room_ID = mmap(NULL, sizeof *active_room_ID, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    *room_base_ID = 0;
-    *active_room_ID = 0;
 
-    for (i = 0; i < 100; i++)
-    {
-        list_of_room[i].roomID = mmap(NULL, sizeof *list_of_room[i].roomID, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-        list_of_room[i].num_of_question = mmap(NULL, sizeof *list_of_room[i].num_of_question, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-        list_of_room[i].time_of_test = mmap(NULL, sizeof *list_of_room[i].time_of_test, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-        list_of_room[i].status = mmap(NULL, sizeof *list_of_room[i].status, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-        list_of_room[i].num_of_user = mmap(NULL, sizeof *list_of_room[i].num_of_user, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-        for (j = 0; j < 100; j++)
-            list_of_room[i].list_of_userID[j].userID = mmap(NULL, sizeof *list_of_room[i].list_of_userID[j].userID, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    }
-    userCurrentID = mmap(NULL, sizeof *userCurrentID, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    *userCurrentID = 1;
+    pthread_t recvt;
+    char ip[INET_ADDRSTRLEN];
+    struct client_info client;
     while (1)
     {
         //accept request
         sin_size = sizeof(struct sockaddr_in);
-        if ((conn_sock = accept(listen_sock, (struct sockaddr *)&client, &sin_size)) == -1)
+        if ((conn_sock = accept(listen_sock, (struct sockaddr *)&client_addr, &sin_size)) == -1)
             perror("\nError: ");
 
-        printf("You got a connection from %s - %d\n", inet_ntoa(client.sin_addr), conn_sock); /* prints client's IP */
+        printf("You got a connection from %s - %d\n", inet_ntoa(client_addr.sin_addr), conn_sock); /* prints client's IP */
+        pthread_mutex_lock(&mutex);
+        inet_ntop(AF_INET, (struct sockaddr *)&client_addr, ip, INET_ADDRSTRLEN);
+        client.conn_sock = conn_sock;
+        strcpy(client.ip, ip);
+        clients[n] = conn_sock;
+        n++;
+        printf("%s connected\n", ip);
 
-        pid = fork();
-        if (pid == -1)
-        {
-            close(conn_sock);
-            printf("ERROR in new process creation\n");
-            exit(1);
-        }
-        else if (pid > 0)
-        { //parent
-            close(conn_sock);
-            continue;
-        }
-        else if (pid == 0)
-        {
-            //kill() gui tin hieu den progress khac
-            //child process
-            //handleSignal()
-            //do whatever you want
-
-            while (1)
-            {
-                *userCurrentID++;
-                printf("-----------BEGIN-------------\n");
-                int bytes_received;
-                char *roomInformation[2];
-                char *roomID;
-                memset(recv_message, '\0', strlen(recv_message));
-                //memset(roomInformation, '\0', strlen(roomInformation));
-                char *request[2];
-                int i = 0;
-
-                bytes_received = recv(conn_sock, recv_message, BUFF_SIZE, 0);
-                recv_message[bytes_received] = '\0';
-                printf("Message: %s.\n", recv_message);
-
-                char *p = strtok(recv_message, "-");
-                while (p != NULL)
-                {
-                    request[i++] = p;
-                    p = strtok(NULL, "\0");
-                }
-                printf("Receiving data ...\n");
-
-                if (strcmp(request[0], "PRACTICE") == 0)
-                {
-                    printf("Practice start\n");
-                    prepare_test(conn_sock);
-                    number_of_question = 3;
-                    printDONE();
-                }
-                else if (strcmp(request[0], "NEW") == 0)
-                {
-                    char trash[BUFSIZ];
-                    printf("New test start\n");
-                    i = 0;
-                    char *dump = strtok(request[1], "-");
-                    while (dump != NULL)
-                    {
-                        roomInformation[i++] = dump;
-                        dump = strtok(NULL, "\0");
-                    }
-                    printf("Number of question: \"%d\". \n", atoi(roomInformation[0]));
-                    number_of_question = atoi(roomInformation[0]);
-                    printf("Time: \"%d\". \n", atoi(roomInformation[1]));
-                    printf("create room\n");
-                    create_new_room(atoi(roomInformation[0]), atoi(roomInformation[1]));
-                    printf("create done\n");
-                    bytes_sent = send(conn_sock, "CREATEROOM- ", strlen("CREATEROOM- "), 0);
-                    recv(conn_sock, trash, BUFF_SIZE, 0);
-                    printf("trash: %s", trash);
-                    printf("number of active room: %d\n", *active_room_ID);
-                    printDONE();
-                }
-                else if (strcmp(request[0], "START") == 0)
-                {
-                    *active_room_ID = *active_room_ID - 1;
-                    printf("number of active room: %d\n", *active_room_ID);
-                    bytes_received = recv(conn_sock, recv_message, BUFF_SIZE, 0);
-                    recv_message[bytes_received] = '\0';
-                    printf("Message: %s.\n", recv_message);
-                    prepare_test(conn_sock);
-                    *list_of_room[*room_base_ID].status = 2;
-                }
-                else if (strcmp(request[0], "REQUESTLIST") == 0)
-                {
-                    printf("Choose room test start\n");
-                    create_roomlist_file_and_send(conn_sock);
-                    printDONE();
-                }
-                else if (strcmp(request[0], "CHOOSE") == 0)
-                {
-                    printf("Choose room test start\n");
-                    roomID = request[1];
-                    //printf("RoomID: %d - %s\n", atoi(roomID), roomID);
-
-                    for (i = 1; i < *room_base_ID + 1; i++)
-                    {
-                        printf("room id: %d\n", *list_of_room[i].roomID);
-                        if (atoi(roomID) == *list_of_room[i].roomID)
-                        {
-                            printf("begin test\n");
-                            *list_of_room[i].num_of_user++;
-                            *list_of_room[i].list_of_userID[*list_of_room[i].num_of_user].userID = *userCurrentID;
-                            prepare_test(conn_sock);
-                            number_of_question = *list_of_room[i].num_of_question;
-                        }
-
-                        else
-                        {
-                            printf("dead\n");
-                        }
-                    }
-                    printDONE();
-                }
-                else if (strcmp(request[0], "FINISH") == 0)
-                {
-                    strcpy(recv_answers, request[1]);
-                    recv_answers[strlen(recv_answers) - 1] = '\0';
-                    printf("Answers: %s\n", recv_answers);
-                    judge(conn_sock, number_of_question);
-                    printDONE();
-                }
-                else if (strcmp(request[0], "QUIT") == 0)
-                {
-                    printf("Disconnected\n");
-                    //kill(pid, SIGTERM);
-                    printDONE();
-                    break;
-                }
-                else
-                {
-                    printf("u r so fucking dead\n");
-                    printDONE();
-                    //prepare_test(conn_sock);
-                }
-            }
-            break;
-            close(conn_sock);
-        }
+        pthread_create(&recvt, NULL, echo, &client);
+        pthread_mutex_unlock(&mutex);
     }
     close(listen_sock);
     return 0;
