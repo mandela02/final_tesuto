@@ -1,0 +1,8 @@
+do
+            {
+                printf("Shall we begin (type \"start\" to start): ");
+                scanf("%s", commandCode);
+                if (strcmp(commandCode, "start") != 0)
+                    printf("you can only type \"start\"\n");
+            } while (strcmp(commandCode, "start") != 0);
+            

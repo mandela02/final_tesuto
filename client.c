@@ -8,6 +8,8 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+
 #include <time.h>
 #include <errno.h>
 
@@ -77,7 +79,7 @@ void receiveData(int client_sock, int file_size, char *file_name)
                 break;
         }
 
-        printf("Ok received from client!\n\n\n");
+        //printf("Ok received from client!\n\n\n");
         fclose(fr);
 
         bytes_sent = send(client_sock, "Success receiver file\n", sizeof("Success receiver file\n"), 0); /* send to the client welcome message */
@@ -85,7 +87,7 @@ void receiveData(int client_sock, int file_size, char *file_name)
         {
             printf("\nConnection closed. doom\n");
         }
-        printf("Receiver data done\n");
+        //printf("Receiver data done\n");
     }
 }
 
@@ -93,6 +95,8 @@ void readFile_roomList(int num_of_room, char *file_name)
 {
     FILE *filein;
     int i;
+    int dummy;
+    dummy = num_of_room;
     if ((filein = fopen(file_name, "r")) == NULL)
     {
         printf("Cannot open \" exam_client.txt \".\n");
@@ -100,10 +104,14 @@ void readFile_roomList(int num_of_room, char *file_name)
     for (i = 0; i < num_of_room; i++)
     {
         fscanf(filein, "%d\t%d\t%d\t%d", &list_of_room[i].roomID, &list_of_room[i].num_of_question, &list_of_room[i].time_of_test, &list_of_room[i].status);
-        printf("Room id: %d.\n", list_of_room[i].roomID);
-        printf("\tNumber of question: %d \n", list_of_room[i].num_of_question);
-        printf("\tTime: %d \n", list_of_room[i].time_of_test);
-        printf("\tStatus: %s \n", list_of_room[i].status ? "active" : "deactive");
+        if (list_of_room[i].status == 1) //waiting
+        {
+            printf("Room id: %d.\n", list_of_room[i].roomID);
+            printf("\tNumber of question: %d \n", list_of_room[i].num_of_question);
+            printf("\tTime: %d minute\n", list_of_room[i].time_of_test);
+            //printf("\tStatus: %s \n", list_of_room[i].status ? "active" : "deactive");
+            //dummy--;
+        }
     }
     fclose(filein);
     remove(file_name);
@@ -116,8 +124,8 @@ void readFile_questionlist(int num_of_quest, char *file_name)
     {
         printf("Cannot open \" exam_client.txt \".\n");
     }
-    else
-        printf("everthing OK _ 1\n");
+    //else
+    // printf("everthing OK _ 1\n");
     int i;
     char myAns;
     char answer[BUFF_SIZE];
@@ -128,7 +136,7 @@ void readFile_questionlist(int num_of_quest, char *file_name)
     {
         memset(answer, 0, strlen(answer));
 
-        printf("everthing OK _ 2\n");
+        //printf("everthing OK _ 2\n");
         getchar();
         fscanf(filein, "%d\t%s\t%s\t%s\t%s\t%s", &exam_test[i].quesID, exam_test[i].question, exam_test[i].answerA, exam_test[i].answerB, exam_test[i].answerC, exam_test[i].answerD);
         printf("Question %d: %s.\n", i + 1, exam_test[i].question);
@@ -138,9 +146,9 @@ void readFile_questionlist(int num_of_quest, char *file_name)
         printf("\tAnswer D: %s \n", exam_test[i].answerD);
         printf("Your answer: ");
         scanf("%c", &myAns);
-        printf("everthing OK _ 3\n");
+        //printf("everthing OK _ 3\n");
         sprintf(answer, "%d-%c:", exam_test[i].quesID, myAns);
-        printf("everthing OK _ 4\n");
+        //printf("everthing OK _ 4\n");
         strcat(answers, answer);
     }
     //printf("myAnswers: %s\n", answers);
@@ -155,11 +163,11 @@ void sendAnswer(int client_sock)
 
     strcpy(send_message, "FINISH-");
     strcat(send_message, answers);
-    printf("message: %s\n", send_message);
+    //printf("message: %s\n", send_message);
     bytes_sent = send(client_sock, send_message, strlen(send_message), 0);
     bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
     recv_message[bytes_received] = '\0';
-    printf("Message from server: \"%s\"\n", recv_message);
+    //printf("Message from server: \"%s\"\n", recv_message);
     char *receive[2];
     int i = 0;
     char *p = strtok(recv_message, "-");
@@ -168,7 +176,7 @@ void sendAnswer(int client_sock)
         receive[i++] = p;
         p = strtok(NULL, "\0");
     }
-    printf("Score: %d\n", atoi(receive[1]));
+    printf("YOUR Score: %d\n", atoi(receive[1]));
     //free(exam_test);
     //free(answers);
     remove(file_name_questionlist);
@@ -176,13 +184,13 @@ void sendAnswer(int client_sock)
 
 void begin_test(int client_sock, int num_of_question)
 {
-    printf("step 1\n");
+    //printf("step 1\n");
     receiveFile(client_sock, file_name_questionlist);
-    printf("step 2\n");
+    //printf("step 2\n");
     readFile_questionlist(num_of_question, file_name_questionlist);
-    printf("step 3\n");
+    //printf("step 3\n");
     sendAnswer(client_sock);
-    printf("step 4\n");
+    //printf("step 4\n");
     remove(file_name_questionlist);
 }
 
@@ -220,6 +228,8 @@ int main(int argc, char const *argv[])
     {
         int num_of_quest;
         int time_of_test;
+        char commandCode[BUFF_SIZE];
+
         memset(send_message, '\0', strlen(send_message));
         memset(recv_message, '\0', strlen(recv_message));
         int choice;
@@ -228,37 +238,58 @@ int main(int argc, char const *argv[])
         printf("3. Choose a room\n");
         printf("4. Quit\n");
 
-        printf("Lua chon: ");
-        scanf("%d", &choice);
+        do
+        {
+            printf("Choose (1-4): ");
+            scanf("%d", &choice);
+            if (choice < 1 || choice > 4)
+                printf("Can only choose between 1 and 4\n");
+        }
+
+        while (choice < 1 || choice > 4);
+
         switch (choice)
         {
         case 1:
             strcpy(send_message, "PRACTICE- ");
-            printf("message send: %s\n", send_message);
+            //printf("message send: %s\n", send_message);
             bytes_sent = send(client_sock, send_message, strlen(send_message), 0);
 
             //TODO: display file to GUI
             break;
         case 2:
             //strcpy(send_message, "NEW-10-120");
-            printf("Creat new test room!!!\n");
-            printf("Please insert number of question: ");
-            scanf("%d", &num_of_quest);
-            printf("Please insert time (minute): ");
-            scanf("%d", &time_of_test);
+            //char commandCode[100];
+            //printf("Creat new test room!!!\n");
+            do
+            {
+                printf("Please insert number of question (1-30): ");
+                scanf("%d", &num_of_quest);
+                if (num_of_quest < 1 || num_of_quest > 30)
+                    printf("Minimum is 1, maximum is 30\n");
+            } while (num_of_quest < 1 || num_of_quest > 30);
+
+            do
+            {
+                printf("Please insert time (minute): ");
+                scanf("%d", &time_of_test);
+                if (time_of_test < 1 || time_of_test > 60)
+                    printf("Minimum is 1, maximum is 60\n");
+            } while (time_of_test < 1 || time_of_test > 60);
             sprintf(send_message, "NEW-%d-%d", num_of_quest, time_of_test);
-            printf("message send: %s\n", send_message);
+            //printf("message send: %s\n", send_message);
             bytes_sent = send(client_sock, send_message, strlen(send_message), 0);
+
             break;
         case 3:
             strcpy(send_message, "REQUESTLIST- ");
-            printf("message send: %s\n", send_message);
+            //printf("message send: %s\n", send_message);
             bytes_sent = send(client_sock, send_message, strlen(send_message), 0);
             break;
 
         case 4:
             strcpy(send_message, "QUIT- ");
-            printf("message send: %s\n", send_message);
+            //printf("message send: %s\n", send_message);
             bytes_sent = send(client_sock, send_message, strlen(send_message), 0);
             exit(1);
             break;
@@ -269,7 +300,7 @@ int main(int argc, char const *argv[])
         memset(recv_message, 0, strlen(recv_message));
         bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
         recv_message[bytes_received] = '\0';
-        printf("message received: \"%s\"\n", recv_message);
+        //printf("message received: \"%s\"\n", recv_message);
         send(client_sock, "Success message, begin test\n", sizeof("Success message, begin test\n"), 0);
         char *request[2];
 
@@ -293,10 +324,21 @@ int main(int argc, char const *argv[])
         else if (strcmp(request[0], "CREATEROOM") == 0)
         {
             printf(" --- Room created successfully!\n");
+
+            do
+            {
+                printf("Shall we begin (type \"start\" to start): ");
+                scanf("%s", commandCode);
+                if (strcmp(commandCode, "start") != 0)
+                    printf("you can only type \"start\"\n");
+            } while (strcmp(commandCode, "START") != 0);
+            send(client_sock, commandCode, sizeof(commandCode), 0);
+            wait(NULL);
             send(client_sock, "Success message, begin test\n", sizeof("Success message, begin test\n"), 0);
             bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
             recv_message[bytes_received] = '\0';
             printf("message received: \"%s\"\n", recv_message);
+            send(client_sock, "Success message, begin test\n", sizeof("Success message, begin test\n"), 0);
             begin_test(client_sock, num_of_quest);
         }
         else if (strcmp(request[0], "SENDROOMLIST") == 0)
@@ -306,31 +348,33 @@ int main(int argc, char const *argv[])
             receiveFile(client_sock, file_name_roomlist);
             //read room list
             readFile_roomList(number_of_room, file_name_roomlist);
-            printf(" --- Receive room list successfully\n");
-            printf("Choose a room:");
-            scanf("%d", &choose_roomID);
+            //printf(" --- Receive room list successfully\n");
+            do
+            {
+                printf("Choose a room:");
+                scanf("%d", &choose_roomID);
+                if (choose_roomID < 1 || choose_roomID > number_of_room)
+                    printf("Room not exist in system\n");
+            } while (choose_roomID < 1 || choose_roomID > number_of_room);
             sprintf(send_message, "CHOOSE-%d", choose_roomID);
-            printf("message: %s\n", send_message);
+            //printf("message: %s\n", send_message);
             bytes_sent = send(client_sock, send_message, strlen(send_message), 0);
-            printf("num of room: %d\n", number_of_room);
+            //printf("num of room: %d\n", number_of_room);
             for (i = 0; i < number_of_room; i++)
             {
                 if (choose_roomID == list_of_room[i].roomID)
                 {
-                    printf("Start test %d - %d\n", list_of_room[i].roomID, list_of_room[i].num_of_question);
+                    //printf("Start test %d - %d\n", list_of_room[i].roomID, list_of_room[i].num_of_question);
                     bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
                     recv_message[bytes_received] = '\0';
-                    printf("message received: \"%s\"\n", recv_message);
+                    //printf("message received: \"%s\"\n", recv_message);
                     send(client_sock, "Success message, begin test\n", sizeof("Success message, begin test\n"), 0);
-
                     begin_test(client_sock, list_of_room[i].num_of_question);
                 }
                 else
                 {
                     printf("dead daed dead\n");
                 }
-
-                //begin_test(client_sock, list_of_room[i].num_of_question);
             }
         }
         else
