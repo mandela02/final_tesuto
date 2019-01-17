@@ -146,7 +146,8 @@ void create_new_room(int num, int time_test)
     *list_of_room[*room_base_ID].time_of_test = time_test;
     *list_of_room[*room_base_ID].status = 1;
     *list_of_room[*room_base_ID].num_of_user = 1;
-    list_of_room[*room_base_ID].list_of_userID[0].userID = *userCurrentID; //waiting;
+    list_of_room[*room_base_ID].list_of_userID[0].userID = 0; //waiting;
+    list_of_room[*room_base_ID].list_of_userID[1].userID = *userCurrentID; //waiting;
 }
 
 void create_roomlist_file_and_send(int conn_sock)
@@ -514,7 +515,7 @@ int main(int argc, char **argv)
                         {
                             printf("begin test\n");
                             *list_of_room[i].num_of_user++;
-                            *list_of_room[i].list_of_userID[*list_of_room[i].num_of_user - 1].userID = *userCurrentID;
+                            *list_of_room[i].list_of_userID[*list_of_room[i].num_of_user].userID = *userCurrentID;
                             prepare_test(conn_sock);
                             number_of_question = *list_of_room[i].num_of_question;
                         }

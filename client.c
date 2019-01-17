@@ -258,8 +258,6 @@ int main(int argc, char const *argv[])
             //TODO: display file to GUI
             break;
         case 2:
-            //strcpy(send_message, "NEW-10-120");
-            //char commandCode[100];
             //printf("Creat new test room!!!\n");
             do
             {
@@ -327,12 +325,14 @@ int main(int argc, char const *argv[])
 
             do
             {
-                printf("Shall we begin (type \"start\" to start): ");
+                printf("Shall we begin (type \"yes\" to start): ");
                 scanf("%s", commandCode);
-                if (strcmp(commandCode, "start") != 0)
-                    printf("you can only type \"start\"\n");
-            } while (strcmp(commandCode, "START") != 0);
-            send(client_sock, commandCode, sizeof(commandCode), 0);
+                if (strcmp(commandCode, "yes") != 0)
+                    printf("you can only type \"yes\"\n");
+            } while (strcmp(commandCode, "yes") != 0);
+            memset(send_message, 0, strlen(send_message));
+            strcpy(send_message, "START- ");
+            send(client_sock, send_message, sizeof(send_message), 0);
             wait(NULL);
             send(client_sock, "Success message, begin test\n", sizeof("Success message, begin test\n"), 0);
             bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
