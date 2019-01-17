@@ -85,7 +85,6 @@ void receiveData(int client_sock, int file_size, char *file_name)
         }
 
         fclose(fr);
-
     }
 }
 
@@ -137,7 +136,6 @@ void readFile_questionlist(int num_of_quest, char *file_name)
     }
 
     fclose(filein);
-    remove(file_name_questionlist);
 }
 
 void do_the_test(int num_of_quest)
@@ -196,8 +194,9 @@ void begin_test(int client_sock, int num_of_question)
     //receive question file
     receiveFile(client_sock, file_name_questionlist);
     //print question to terminal
+
     readFile_questionlist(num_of_question, file_name_questionlist);
-    //
+
     do_the_test(num_of_question);
     //send answers to server
     sendAnswer(client_sock);
@@ -334,14 +333,11 @@ int main(int argc, char const *argv[])
             //strcpy(send_message, "START- ");
             //send start
             send(client_sock, send_message, sizeof(send_message), 0);
-            puts(send_message);
             bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
             recv_message[bytes_received] = '\0';
-            puts(recv_message); //BEGINTESTROOM
 
             bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
             recv_message[bytes_received] = '\0';
-            printf("message .%s.\n", recv_message);
             send(client_sock, "Success message, begin test\n", sizeof("Success message, begin test\n"), 0);
             begin_test(client_sock, num_of_quest);
         }
@@ -360,23 +356,23 @@ int main(int argc, char const *argv[])
                 if (choose_roomID < 1 || choose_roomID > total_room)
                     printf("Room not exist in system\n");
             } while (choose_roomID < 1 || choose_roomID > total_room);
+            printf("it's true %d \n", list_of_room[choose_roomID-1].num_of_question);
 
             sprintf(send_message, "CHOOSE-%d", choose_roomID);
             bytes_sent = send(client_sock, send_message, strlen(send_message), 0);
             printf("Wait for start signal\n");
             bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
             recv_message[bytes_received] = '\0';
-            puts(recv_message); //BEGINTESTROOM
-            send(client_sock, "READYTESTROOM- ", sizeof("READYTESTROOM- "), 0);
-            if (strcmp(recv_message, "BEGINTESTROOM- ") == 0)
+            send(client_sock, "READY_TEST_ROOM- ", sizeof("READY_TEST_ROOM- "), 0);
+            printf("it's true %d \n", list_of_room[choose_roomID].num_of_question);
+
+            if (strcmp(recv_message, "BEGIN_TEST_ROOM- ") == 0)
             {
-                memset(recv_message, '\0', sizeof(recv_message));
-                printf("it's true\n");
+                //memset(recv_message, '\0', sizeof(recv_message));
                 bytes_received = recv(client_sock, recv_message, BUFF_SIZE - 1, 0);
                 recv_message[bytes_received] = '\0';
-                puts(recv_message);
                 send(client_sock, "Success message, begin test\n", sizeof("Success message, begin test\n"), 0);
-                begin_test(client_sock, list_of_room[choose_roomID].num_of_question);
+                begin_test(client_sock, list_of_room[choose_roomID-1].num_of_question);
             }
             else
             {
